@@ -83,6 +83,52 @@ test("realtime status never contains credentials", () => {
   assert.equal("addresses" in status, false);
 });
 
+test("successful room enter does not perform a second member-role update", async () => {
+  const transport = new NeteaseRealtimeTransport(true);
+  let roleUpdateCalls = 0;
+  const internals = transport as unknown as {
+    runtimeReady: boolean;
+    chatroom: {
+      enter: () => boolean;
+      updateMyRoomRoleAsync: () => Promise<[number, number]>;
+    } | null;
+    pendingEnter: { resolve: () => void } | null;
+    requestEnterTicket: () => Promise<[number, string]>;
+  };
+
+  internals.runtimeReady = true;
+  internals.requestEnterTicket = async () => [200, "fresh-ticket"];
+  internals.chatroom = {
+    enter: () => {
+      queueMicrotask(() => internals.pendingEnter?.resolve());
+      return true;
+    },
+    updateMyRoomRoleAsync: async () => {
+      roleUpdateCalls += 1;
+      return [0, 415];
+    },
+  };
+
+  await transport.connect({
+    roomId: "room",
+    chatRoomId: "701712120",
+    credentials: {
+      accId: "backup-account",
+      token: "server-only-token",
+      addresses: [],
+    },
+    memberProfile: {
+      userId: "backup-account",
+      nick: "backup",
+      avatar: "https://example.invalid/avatar.jpg",
+    },
+  });
+
+  assert.equal(roleUpdateCalls, 0);
+  assert.equal(transport.getStatus().connected, true);
+  assert.equal(transport.getStatus().lastError, null);
+});
+
 test("playback diagnostic only exposes whitelisted protocol fields", () => {
   const diagnostic = buildPlaybackDiagnostic({
     msg_type_: 100,

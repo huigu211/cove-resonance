@@ -784,38 +784,12 @@ export class NeteaseRealtimeTransport {
       await Promise.race([entered, timeout]);
       if (generation !== this.generation) return;
 
-      const profile = options.memberProfile;
-      if (profile?.nick || profile?.avatar) {
-        const memberUpdate: Record<string, unknown> = {
-          account_id_: options.credentials.accId,
-          ...(profile.nick ? { nick_: profile.nick.trim() } : {}),
-          ...(profile.avatar ? { avatar_: profile.avatar.trim() } : {}),
-        };
-        const [, updateCode] = await chatroom.updateMyRoomRoleAsync(
-          roomNumber,
-          memberUpdate,
-          false,
-          "",
-          null,
-          "",
-        );
-        if (updateCode !== 200) {
-          throw new Error(`NIM ChatRoom member profile update failed code=${updateCode}`);
-        }
-
-        const [, lookupCode, members] = await chatroom.getMemberInfoByIDsAsync(
-          roomNumber,
-          [options.credentials.accId],
-          null,
-          "",
-        );
-        if (lookupCode !== 200) {
-          throw new Error(`NIM ChatRoom member profile verify failed code=${lookupCode}`);
-        }
-        const ownMember = asRecord(members[0]);
-        console.log(
-          `NetEase ChatRoom member profile synced: nick=${readString(ownMember.nick_) ? "present" : "empty"} avatar=${readString(ownMember.avatar_) ? "present" : "empty"}`,
-        );
+      // Nick/avatar are already supplied in the authoritative enter request.
+      // A second role update is cosmetic, and some valid QR-login sessions
+      // return 415 here and then invalidate an otherwise successful room
+      // connection. Do not risk the realtime transport for a profile refresh.
+      if (options.memberProfile?.nick || options.memberProfile?.avatar) {
+        console.log("NetEase ChatRoom member profile supplied with room enter");
       }
 
       this.activeMemberProfile = options.memberProfile ?? null;
