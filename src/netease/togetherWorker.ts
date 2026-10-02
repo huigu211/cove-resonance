@@ -1,4 +1,8 @@
 import { NeteaseApiError, NeteaseClient, type AccountProfile } from "./client.js";
+import {
+  parseChatRoomPlaybackCommand,
+  type ChatRoomPlaybackCommand,
+} from "./chatCommands.js";
 import { collectContactUserIds, parseLatestInvite } from "./inviteParser.js";
 import { buildFullLyricsModelContext, countAvailableLyricPayloads } from "./lyricsContext.js";
 import type { PlaybackStateSink } from "./playbackState.js";
@@ -26,6 +30,7 @@ type TogetherWorkerOptions = {
   heartbeatIntervalMs?: number;
   playbackReconcileIntervalMs?: number;
   playbackControlTimeoutMs?: number;
+  chatCommandsEnabled?: boolean;
   onEvent: EventSink;
   stateSink?: PlaybackStateSink;
 };
@@ -90,6 +95,7 @@ export class TogetherWorker {
   private pendingPlaybackControl: PendingPlaybackControl | null = null;
   private queueMutationPending = false;
   private playbackHandlingTail: Promise<void> = Promise.resolve();
+  private chatCommandTail: Promise<void> = Promise.resolve();
   private errorStreak = 0;
   private accountProfile: AccountProfile | null = null;
   private currentLyricsModelContext: string | null = null;
@@ -195,13 +201,24 @@ export class TogetherWorker {
   }
 
   async nextPlayback(): Promise<PlaybackControlResult> {
+    return await this.relativePlayback(1, "NEXT");
+  }
+
+  async previousPlayback(): Promise<PlaybackControlResult> {
+    return await this.relativePlayback(-1, "PREVIOUS");
+  }
+
+  private async relativePlayback(
+    offset: -1 | 1,
+    label: "PREVIOUS" | "NEXT",
+  ): Promise<PlaybackControlResult> {
     if (!this.roomId) throw new Error("NetEase Listen Together is not currently in a room.");
     const currentSongId = this.latestPlaying?.songId ?? this.status.currentSong?.id ?? null;
     if (!currentSongId) throw new Error("NetEase current playback state is unavailable.");
 
     const playlist = await this.client.getTogetherPlaylist(this.roomId);
     if (playlist.playMode !== "ORDER_LOOP") {
-      throw new Error(`Unsupported NetEase Together playMode for NEXT: ${playlist.playMode ?? "unknown"}`);
+      throw new Error(`Unsupported NetEase Together playMode for ${label}: ${playlist.playMode ?? "unknown"}`);
     }
     if (!playlist.displayList.length) {
       throw new Error("NetEase Together displayList is empty.");
@@ -214,10 +231,11 @@ export class TogetherWorker {
 
     const stillCurrentSongId = this.latestPlaying?.songId ?? this.status.currentSong?.id ?? null;
     if (stillCurrentSongId !== currentSongId) {
-      throw new Error("NetEase playback changed while resolving NEXT; retry the command.");
+      throw new Error(`NetEase playback changed while resolving ${label}; retry the command.`);
     }
 
-    const targetSongId = playlist.displayList[(currentIndex + 1) % playlist.displayList.length];
+    const targetIndex = (currentIndex + offset + playlist.displayList.length) % playlist.displayList.length;
+    const targetSongId = playlist.displayList[targetIndex];
     return await this.gotoPlayback(targetSongId);
   }
 
@@ -826,11 +844,51 @@ export class TogetherWorker {
       this.handledChatMessageKeys.delete(oldest);
     }
 
+    const command = this.options.chatCommandsEnabled === false
+      ? null
+      : parseChatRoomPlaybackCommand(message.text);
+    const commandAuthorized = !this.options.inviterUid
+      || message.senderId === this.options.inviterUid;
+    if (command && commandAuthorized) {
+      this.chatCommandTail = this.chatCommandTail
+        .then(() => this.executeChatRoomPlaybackCommand(command))
+        .catch((error) => {
+          const detail = error instanceof Error ? error.message : "unknown error";
+          console.error(`NetEase ChatRoom command failed: command=${command} detail=${detail}`);
+        });
+      return;
+    }
+
     this.options.onEvent(
       "netease.chatroom",
       message.text,
       this.currentLyricsModelContext ?? undefined,
     );
+  }
+
+  private async executeChatRoomPlaybackCommand(command: ChatRoomPlaybackCommand): Promise<void> {
+    const successText: Record<ChatRoomPlaybackCommand, string> = {
+      PREVIOUS: "好，切到上一首啦。",
+      NEXT: "好，切到下一首啦。",
+      PAUSE: "好，暂停啦。",
+      RESUME: "好，继续播放啦。",
+    };
+
+    try {
+      if (command === "PREVIOUS") await this.previousPlayback();
+      else if (command === "NEXT") await this.nextPlayback();
+      else if (command === "PAUSE") await this.pausePlayback();
+      else await this.resumePlayback();
+
+      await this.sendChatRoomText(successText[command]);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      console.error(`NetEase ChatRoom playback command could not be confirmed: command=${command} detail=${detail}`);
+      await this.sendChatRoomText("刚才没操作成功，你再试一次吧。").catch((sendError) => {
+        const sendDetail = sendError instanceof Error ? sendError.message : "unknown error";
+        console.error(`NetEase ChatRoom command failure notice could not be sent: detail=${sendDetail}`);
+      });
+    }
   }
 
   private async loadLyrics(song: SongDetails): Promise<string | undefined> {
@@ -902,6 +960,9 @@ export function createTogetherWorker(
     heartbeatIntervalMs: parseInterval("TOGETHER_HEARTBEAT_INTERVAL_MS", 10_000),
     playbackReconcileIntervalMs: parseInterval("TOGETHER_PLAYBACK_RECONCILE_INTERVAL_MS", 30_000),
     playbackControlTimeoutMs: parseInterval("TOGETHER_PLAYBACK_CONTROL_TIMEOUT_MS", 8_000),
+    chatCommandsEnabled: !/^(0|false|off|no)$/i.test(
+      process.env.NETEASE_CHAT_COMMANDS_ENABLED?.trim() ?? "",
+    ),
     onEvent,
     stateSink,
   });

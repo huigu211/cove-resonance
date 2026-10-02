@@ -40,6 +40,122 @@ test("deduplicates repeated realtime ChatRoom messages by message id", () => {
   assert.deepEqual(events, [{ source: "netease.chatroom", text: "hello once" }]);
 });
 
+test("executes an authorized ChatRoom playback command without enqueueing it as conversation", async () => {
+  const events: Array<{ source: string; text: string }> = [];
+  const replies: string[] = [];
+  let nextCalls = 0;
+  const worker = new TogetherWorker({
+    cookie: "",
+    enabled: false,
+    inviterUid: "host-account",
+    onEvent: (source, text) => events.push({ source, text }),
+  });
+  const internals = worker as unknown as {
+    handleRealtimeChatMessage: (message: RealtimeChatRoomMessage) => void;
+    nextPlayback: () => Promise<unknown>;
+    realtime: { sendChatRoomText: (text: string) => Promise<unknown> };
+  };
+  internals.nextPlayback = async () => {
+    nextCalls += 1;
+    return {};
+  };
+  internals.realtime.sendChatRoomText = async (text) => {
+    replies.push(text);
+    return {};
+  };
+
+  internals.handleRealtimeChatMessage({
+    type: "chatroom_message",
+    category: "text",
+    msgType: 0,
+    senderId: "host-account",
+    senderNick: "host",
+    text: "小安，切到下一首歌呢！",
+    messageId: "command-1",
+    timetagMs: 1,
+    receivedAtMs: 1,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(nextCalls, 1);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0], "好，切到下一首啦。");
+  assert.deepEqual(events, []);
+});
+
+test("does not execute ChatRoom commands from a sender other than the configured inviter", async () => {
+  const events: Array<{ source: string; text: string }> = [];
+  let nextCalls = 0;
+  const worker = new TogetherWorker({
+    cookie: "",
+    enabled: false,
+    inviterUid: "host-account",
+    onEvent: (source, text) => events.push({ source, text }),
+  });
+  const internals = worker as unknown as {
+    handleRealtimeChatMessage: (message: RealtimeChatRoomMessage) => void;
+    nextPlayback: () => Promise<unknown>;
+  };
+  internals.nextPlayback = async () => {
+    nextCalls += 1;
+    return {};
+  };
+
+  internals.handleRealtimeChatMessage({
+    type: "chatroom_message",
+    category: "text",
+    msgType: 0,
+    senderId: "someone-else",
+    senderNick: "guest",
+    text: "下一首",
+    messageId: "command-2",
+    timetagMs: 2,
+    receivedAtMs: 2,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(nextCalls, 0);
+  assert.deepEqual(events, [{ source: "netease.chatroom", text: "下一首" }]);
+});
+
+test("PREVIOUS resolves the preceding ORDER_LOOP displayList song", async () => {
+  const worker = new TogetherWorker({ cookie: "", enabled: false, onEvent: () => {} });
+  let targetSongId: string | null = null;
+  const fakeResult = {
+    ok: true as const,
+    confirmed: true as const,
+    commandType: "GOTO" as const,
+    roomId: "room",
+    songId: "11",
+    playStatus: "PLAY" as const,
+    progressMs: 0,
+    clientSeq: 1,
+    serverSeq: 2,
+    confirmedAt: new Date(0).toISOString(),
+  };
+  const internals = worker as unknown as {
+    roomId: string | null;
+    latestPlaying: { songId: string; playStatus: "PLAY"; progress: number } | null;
+    client: { getTogetherPlaylist: () => Promise<{ displayList: string[]; randomList: string[]; playMode: string }> };
+    gotoPlayback: (songId: string) => Promise<typeof fakeResult>;
+  };
+  internals.roomId = "room";
+  internals.latestPlaying = { songId: "22", playStatus: "PLAY", progress: 1000 };
+  internals.client.getTogetherPlaylist = async () => ({
+    displayList: ["11", "22", "33"],
+    randomList: [],
+    playMode: "ORDER_LOOP",
+  });
+  internals.gotoPlayback = async (songId) => {
+    targetSongId = songId;
+    return fakeResult;
+  };
+
+  const result = await worker.previousPlayback();
+  assert.equal(targetSongId, "11");
+  assert.equal(result, fakeResult);
+});
+
 
 test("applies realtime playback to state immediately before the next HTTP poll", async () => {
   const events: Array<{ source: string; text: string }> = [];

@@ -227,6 +227,29 @@ export function registerNeteaseTogetherTools(
   );
 
   server.registerTool(
+    "netease_together_previous",
+    {
+      title: "Play the previous NetEase Together song",
+      description: "Resolve the previous song from the current NetEase Listen Together ORDER_LOOP displayList, then switch via a realtime-confirmed GOTO command.",
+      inputSchema: {},
+      outputSchema: playbackControlOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: false,
+      },
+    },
+    async () => {
+      const result = await togetherWorker.previousPlayback();
+      return {
+        structuredContent: result,
+        content: [{ type: "text", text: JSON.stringify(result) }],
+      };
+    },
+  );
+
+  server.registerTool(
     "netease_together_next",
     {
       title: "Play the next NetEase Together song",
