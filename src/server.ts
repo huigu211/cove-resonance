@@ -118,6 +118,16 @@ export function createHttpServer() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/login/status") {
+      if (!ownerAuth.hasAdminSession(req)) {
+        writeJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      writeJson(res, 200, { accountReady: togetherWorker.getStatus().enabled });
+      return;
+    }
+
     if (req.method === "POST" && (url.pathname === "/login/qr" || url.pathname === "/login/check")) {
       if (!ownerAuth.hasAdminSession(req) || (req.headers.origin && req.headers.origin !== process.env.BRIDGE_PUBLIC_ORIGIN)) {
         writeJson(res, 401, { error: "unauthorized" });
