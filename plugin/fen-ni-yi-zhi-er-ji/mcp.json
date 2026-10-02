@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "cove-music": {
+      "type": "streamable-http",
+      "url": "https://fen-ni-yi-zhi-er-ji.onrender.com/mcp/music"
+    }
+  }
+}

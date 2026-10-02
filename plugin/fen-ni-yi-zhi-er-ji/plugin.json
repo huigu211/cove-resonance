@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "fen-ni-yi-zhi-er-ji",
+  "version": "0.1.0",
+  "description": "Private NetEase Cloud Music Listen Together Bridge for one owner, with room chat, playback, lyrics, and replies.",
+  "author": { "name": "huigu211" },
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "分你一只耳机",
+        "shortDescription": "网易云原生一起听",
+        "longDescription": "在网易云音乐原生一起听房间里收发消息，查看歌曲与歌词，并控制播放。由你自己的 Render Bridge 运行。",
+        "developerName": "huigu211",
+        "category": "Productivity",
+        "capabilities": ["Interactive"],
+        "defaultPrompt": "连接我的网易云一起听房间，先检查连接状态；我明确说开始监听时使用 Long-wait。"
+      }
+    }
+  }
+}
