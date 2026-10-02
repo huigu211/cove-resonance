@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -18,6 +18,7 @@ import { OwnerAuth } from "./ownerAuth.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const INGEST_TOKEN = process.env.BRIDGE_INGEST_TOKEN ?? "";
+const SITE_RELAY_TOKEN = process.env.BRIDGE_SITE_RELAY_TOKEN ?? "";
 const UNIX_SOCKET = process.env.BRIDGE_UNIX_SOCKET?.trim() ?? "";
 const queue = new InMemoryEventQueue();
 const playbackState = new PlaybackStateStore();
@@ -74,6 +75,15 @@ function authorized(req: IncomingMessage): boolean {
   return (TEST_BYPASS && !INGEST_TOKEN)
     || (Boolean(INGEST_TOKEN) && req.headers.authorization === `Bearer ${INGEST_TOKEN}`)
     || ownerAuth.hasMcpToken(req);
+}
+
+function siteRelayAuthorized(req: IncomingMessage): boolean {
+  if (!SITE_RELAY_TOKEN) return false;
+  const authorization = req.headers.authorization;
+  if (typeof authorization !== "string" || !authorization.startsWith("Bearer ")) return false;
+  const supplied = Buffer.from(authorization.slice("Bearer ".length), "utf8");
+  const expected = Buffer.from(SITE_RELAY_TOKEN, "utf8");
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
 export function createHttpServer() {
@@ -200,7 +210,7 @@ export function createHttpServer() {
     const mcpMethods = new Set(["POST", "GET", "DELETE"]);
     const mcpProfile = MCP_PATHS.get(url.pathname);
     if (mcpProfile && mcpMethods.has(req.method)) {
-      if (!TEST_BYPASS && !ownerAuth.hasMcpToken(req)) {
+      if (!TEST_BYPASS && !ownerAuth.hasMcpToken(req) && !siteRelayAuthorized(req)) {
         ownerAuth.challenge(res);
         return;
       }
