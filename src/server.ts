@@ -9,14 +9,23 @@ export { buildBridgeEvent } from "./bridge/events.js";
 import { MCP_PATHS } from "./profiles.js";
 import { listenerWakeHub } from "./listenerWake.js";
 import { PlaybackStateStore } from "./netease/playbackState.js";
+import { NeteaseClient } from "./netease/client.js";
+import { QrLogin } from "./netease/qrLogin.js";
+import { loginPage } from "./netease/loginPage.js";
 import { createTogetherWorker } from "./netease/togetherWorker.js";
 import { InMemoryEventQueue } from "./queue.js";
+import { OwnerAuth } from "./ownerAuth.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const INGEST_TOKEN = process.env.BRIDGE_INGEST_TOKEN ?? "";
 const UNIX_SOCKET = process.env.BRIDGE_UNIX_SOCKET?.trim() ?? "";
 const queue = new InMemoryEventQueue();
 const playbackState = new PlaybackStateStore();
+const ownerAuth = new OwnerAuth();
+const qrLogin = new QrLogin();
+const TEST_BYPASS = process.env.NODE_ENV === "test"
+  && process.env.COVE_TEST_INSECURE_ALLOW === "1"
+  && !process.env.BRIDGE_OWNER_SECRET;
 
 function enqueueTogetherEvent(
   source: string,
@@ -35,7 +44,7 @@ function enqueueTogetherEvent(
   return created;
 }
 
-const togetherWorker = createTogetherWorker(enqueueTogetherEvent, playbackState);
+let togetherWorker = createTogetherWorker(enqueueTogetherEvent, playbackState);
 
 const eventInput = z.object({
   eventId: z.string().trim().min(1).max(200).optional(),
@@ -62,7 +71,9 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 }
 
 function authorized(req: IncomingMessage): boolean {
-  return !INGEST_TOKEN || req.headers.authorization === `Bearer ${INGEST_TOKEN}`;
+  return (TEST_BYPASS && !INGEST_TOKEN)
+    || (Boolean(INGEST_TOKEN) && req.headers.authorization === `Bearer ${INGEST_TOKEN}`)
+    || ownerAuth.hasMcpToken(req);
 }
 
 export function createHttpServer() {
@@ -89,9 +100,51 @@ export function createHttpServer() {
         ok: true,
         service: "cove-bridge",
         version: "0.1.0",
-        queue: queue.status(),
-        listener: listenerWakeHub.status(),
       });
+      return;
+    }
+
+    try {
+      if (await ownerAuth.handle(req, res, url, () => readJson(req))) return;
+    } catch {
+      writeJson(res, 400, { error: "invalid_auth_request" });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/login") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
+        "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" });
+      res.end(loginPage);
+      return;
+    }
+
+    if (req.method === "POST" && (url.pathname === "/login/qr" || url.pathname === "/login/check")) {
+      if (!ownerAuth.hasAdminSession(req) || (req.headers.origin && req.headers.origin !== process.env.BRIDGE_PUBLIC_ORIGIN)) {
+        writeJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      if (togetherWorker.getStatus().enabled) {
+        writeJson(res, 409, { error: "account_already_active" });
+        return;
+      }
+      try {
+        if (url.pathname === "/login/qr") {
+          writeJson(res, 200, { image: await qrLogin.create(), expiresInSeconds: 180 });
+        } else {
+          const result = await qrLogin.check();
+          if (result.status === "confirmed" && result.cookie) {
+            // Validate the session before keeping it. Never return or log the cookie.
+            await new NeteaseClient(result.cookie).getAccountProfile();
+            process.env.NETEASE_COOKIE = result.cookie;
+            process.env.TOGETHER_ENABLED = "true";
+            togetherWorker = createTogetherWorker(enqueueTogetherEvent, playbackState);
+            togetherWorker.start();
+          }
+          writeJson(res, 200, { status: result.status });
+        }
+      } catch {
+        writeJson(res, 502, { error: "netease_login_unavailable" });
+      }
       return;
     }
 
@@ -137,6 +190,10 @@ export function createHttpServer() {
     const mcpMethods = new Set(["POST", "GET", "DELETE"]);
     const mcpProfile = MCP_PATHS.get(url.pathname);
     if (mcpProfile && mcpMethods.has(req.method)) {
+      if (!TEST_BYPASS && !ownerAuth.hasMcpToken(req)) {
+        ownerAuth.challenge(res);
+        return;
+      }
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
       const server = createMcpServer(queue, playbackState, togetherWorker, mcpProfile);

@@ -9,10 +9,14 @@ type RpcResult = {
 
 async function withServer(run: (base: string) => Promise<void>): Promise<void> {
   const previous = process.env.NODE_ENV;
+  const previousAllow = process.env.COVE_TEST_INSECURE_ALLOW;
   process.env.NODE_ENV = "test";
+  process.env.COVE_TEST_INSECURE_ALLOW = "1";
   const { createHttpServer } = await import("../src/server.js");
   if (previous === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = previous;
+  if (previousAllow === undefined) delete process.env.COVE_TEST_INSECURE_ALLOW;
+  else process.env.COVE_TEST_INSECURE_ALLOW = previousAllow;
 
   const server = createHttpServer();
   await new Promise<void>((resolve, reject) => {
