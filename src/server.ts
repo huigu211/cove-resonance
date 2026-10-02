@@ -201,10 +201,6 @@ export function createHttpServer() {
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      res.on("close", () => {
-        void transport.close();
-        void server.close();
-      });
       try {
         await server.connect(transport);
         await transport.handleRequest(req, res);
