@@ -2,7 +2,7 @@ export const loginPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>分你一只耳机 · 备用号登录</title>
 <style>body{font:16px system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1.25rem;color:#222;line-height:1.6}input,button{font:inherit;padding:.8rem;width:100%;box-sizing:border-box;margin:.5rem 0}button{background:#1b1b1b;color:white;border:0;border-radius:.6rem}img{width:min(100%,300px);display:block;margin:1.5rem auto}</style>
-<h1>分你一只耳机</h1><p>输入 Render 中设置的专属密钥，再用网易云音乐备用号扫码。登录凭证只留在服务端。</p>
+<h1>分你一只耳机</h1><p>首次输入专属密钥，这台设备会记住解锁 30 天。之后可直接用网易云音乐备用号扫码。网易云登录凭证只留在服务端。</p>
 <form id="unlock"><input id="secret" type="password" autocomplete="off" required placeholder="专属密钥"><button>解锁扫码</button></form>
 <section id="qr" hidden><button id="new" type="button">生成新二维码</button><img id="image" alt="网易云音乐登录二维码" hidden><p id="message" aria-live="polite"></p></section>
 <script>
@@ -13,7 +13,7 @@ document.getElementById('unlock').onsubmit=async e=>{
  e.preventDefault(); const field=document.getElementById('secret'); const secret=field.value;field.value='';
  try{const r=await fetch('/login/unlock',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({secret})});
   if(!r.ok){show('密钥不正确或服务尚未配置。');qr.hidden=false;return}
-  unlocked=true;document.getElementById('unlock').hidden=true;qr.hidden=false;await create();
+  await opened();
  }catch{show('服务暂时无法连接。');qr.hidden=false}
 };
 async function create(){
@@ -29,7 +29,20 @@ async function create(){
    if(status==='expired'){show('二维码已过期，请生成新二维码。');break}
    if(status==='scanned')show('已扫码，请在网易云音乐 App 中确认。');
   }
- }catch{show('扫码暂时不可用，请稍后再试。')}
+}catch{show('扫码暂时不可用，请稍后再试。')}
+}
+async function opened(){
+ unlocked=true;document.getElementById('unlock').hidden=true;qr.hidden=false;
+ const r=await fetch('/login/status');
+ if(r.status===401){unlocked=false;document.getElementById('unlock').hidden=false;show('解锁已过期，请重新输入专属密钥。');return}
+ if(!r.ok)throw Error();
+ if((await r.json()).accountReady){document.getElementById('image').hidden=true;document.getElementById('new').hidden=true;show('服务已保存本次登录。可以返回 ChatGPT 检查房间连接；服务重启后需重新扫码。');return}
+ document.getElementById('new').hidden=false;await create();
+}
+async function restore(){
+ try{const r=await fetch('/login/session');if(r.ok&&(await r.json()).unlocked)await opened()}
+ catch{qr.hidden=false;show('服务暂时无法连接，请刷新页面再试。')}
 }
 document.getElementById('new').onclick=()=>{void create()};
+void restore();
 </script></html>`;
