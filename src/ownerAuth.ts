@@ -128,6 +128,10 @@ export class OwnerAuth {
 
   async handle(req: IncomingMessage, res: ServerResponse, url: URL, readJson: () => Promise<unknown>): Promise<boolean> {
     const path = url.pathname;
+    if (req.method === "GET" && path === "/login/session") {
+      send(res, 200, { unlocked: this.hasAdminSession(req) });
+      return true;
+    }
     if (req.method === "GET" && (path === "/.well-known/oauth-protected-resource"
       || path === "/.well-known/oauth-protected-resource/mcp/music")) {
       send(res, 200, { resource: this.origin, authorization_servers: [this.origin], scopes_supported: ["music"] });
@@ -216,7 +220,7 @@ export class OwnerAuth {
       if (!this.attempt() || typeof body.secret !== "string" || !this.password(body.secret)) {
         send(res, 401, { error: "unauthorized" }); return true;
       }
-      res.setHeader("Set-Cookie", `cove_admin=${this.token("admin", 12 * 3600)}; HttpOnly; Secure; SameSite=Strict; Path=/login; Max-Age=43200`);
+      res.setHeader("Set-Cookie", `cove_admin=${this.token("admin", 30 * 86400)}; HttpOnly; Secure; SameSite=Strict; Path=/login; Max-Age=2592000`);
       send(res, 200, { ok: true }); return true;
     }
     return false;
