@@ -90,6 +90,21 @@ test("private MCP requires OAuth and validates owner login with PKCE", async () 
       headers: { "content-type": "application/json", origin }, body: JSON.stringify({ secret }) });
     assert.equal(unlock.status, 200);
     assert.match(unlock.headers.get("set-cookie") ?? "", /HttpOnly; Secure; SameSite=Strict/);
+    assert.match(unlock.headers.get("set-cookie") ?? "", /Max-Age=2592000/);
+    const cookie = (unlock.headers.get("set-cookie") ?? "").split(";")[0];
+    const restored = await fetch(base + "/login/session", { headers: { cookie } });
+    assert.deepEqual(await restored.json(), { unlocked: true });
+    const anonymous = await fetch(base + "/login/session");
+    assert.deepEqual(await anonymous.json(), { unlocked: false });
+    const statusDenied = await fetch(base + "/login/status");
+    assert.equal(statusDenied.status, 401);
+    const status = await fetch(base + "/login/status", { headers: { cookie } });
+    assert.equal(status.status, 200);
+    assert.equal(typeof (await status.json() as { accountReady: unknown }).accountReady, "boolean");
+    // A server restart keeps the browser unlock valid with the same owner key.
+    const { OwnerAuth } = await import("../src/ownerAuth.js");
+    const restartedAuth = new OwnerAuth();
+    assert.equal(restartedAuth.hasAdminSession({ headers: { cookie } } as never), true);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     for (const [name, value] of Object.entries(previous)) {
