@@ -10,6 +10,10 @@ import { MCP_PATHS } from "./profiles.js";
 import { listenerWakeHub } from "./listenerWake.js";
 import { PlaybackStateStore } from "./netease/playbackState.js";
 import { NeteaseClient } from "./netease/client.js";
+import {
+  restoreNeteaseCookieFromEnvironment,
+  sealNeteaseCookie,
+} from "./netease/credentialSeal.js";
 import { QrLogin } from "./netease/qrLogin.js";
 import { loginPage } from "./netease/loginPage.js";
 import { createTogetherWorker } from "./netease/togetherWorker.js";
@@ -20,6 +24,11 @@ const PORT = Number(process.env.PORT ?? 8787);
 const INGEST_TOKEN = process.env.BRIDGE_INGEST_TOKEN ?? "";
 const SITE_RELAY_TOKEN = process.env.BRIDGE_SITE_RELAY_TOKEN ?? "";
 const UNIX_SOCKET = process.env.BRIDGE_UNIX_SOCKET?.trim() ?? "";
+try {
+  restoreNeteaseCookieFromEnvironment(process.env);
+} catch {
+  console.error("NETEASE_COOKIE_SEALED could not be decrypted; Together login remains disabled.");
+}
 const queue = new InMemoryEventQueue();
 const playbackState = new PlaybackStateStore();
 const ownerAuth = new OwnerAuth();
@@ -86,6 +95,16 @@ function siteRelayAuthorized(req: IncomingMessage): boolean {
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
+function credentialBackup(): { envName: string; value: string } | null {
+  const cookie = process.env.NETEASE_COOKIE?.trim() ?? "";
+  const secret = process.env.BRIDGE_OWNER_SECRET?.trim() ?? "";
+  if (!cookie || !secret) return null;
+  return {
+    envName: "NETEASE_COOKIE_SEALED",
+    value: sealNeteaseCookie(cookie, secret),
+  };
+}
+
 export function createHttpServer() {
   return createServer(async (req, res) => {
     if (!req.url || !req.method) {
@@ -134,7 +153,25 @@ export function createHttpServer() {
         return;
       }
       res.setHeader("Cache-Control", "no-store");
-      writeJson(res, 200, { accountReady: togetherWorker.getStatus().enabled });
+      writeJson(res, 200, {
+        accountReady: togetherWorker.getStatus().enabled,
+        persistentCredentialReady: Boolean(process.env.NETEASE_COOKIE_SEALED?.trim()),
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/login/backup") {
+      if (!ownerAuth.hasAdminSession(req) || (req.headers.origin && req.headers.origin !== process.env.BRIDGE_PUBLIC_ORIGIN)) {
+        writeJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const backup = credentialBackup();
+      if (!backup) {
+        writeJson(res, 409, { error: "credential_backup_unavailable" });
+        return;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      writeJson(res, 200, backup);
       return;
     }
 
